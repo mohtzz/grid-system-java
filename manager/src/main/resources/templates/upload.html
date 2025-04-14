@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Загрузка ZIP файла</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+<h1>Загрузите ZIP файл</h1>
+<form method="POST" action="/upload" enctype="multipart/form-data">
+    <input type="file" name="file" /><br/><br/>
+    <button type="submit">Загрузить</button>
+</form>
+</body>
+</html>

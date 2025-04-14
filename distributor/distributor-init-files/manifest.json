@@ -1,0 +1,8 @@
+{
+  "className": "org.example.ResultSaver",
+  "annotationEndName": "org.example.End",
+  "annotationProcessName": "org.example.Process",
+  "data": {
+    "dataZip": "uploads/data.zip"
+  }
+}
