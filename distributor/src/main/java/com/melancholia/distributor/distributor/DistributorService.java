@@ -37,8 +37,8 @@ public class DistributorService {
     private String UPLOAD_PATH;
     private String zipName = null;
 
-//    private static final long PROCESS_INTERVAL_MS = 5_000;
-    private static final long PROCESS_INTERVAL_MS = 10;
+    private static final long PROCESS_INTERVAL_MS = 5_000;
+//    private static final long PROCESS_INTERVAL_MS = 10;
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public String getZipName() {
