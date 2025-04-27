@@ -29,6 +29,7 @@ public class DistributorController {
     @Value("${upload-path}")
     private String UPLOAD_PATH;
     private static final ObjectMapper mapper = new ObjectMapper();
+    private long startTime;
 
     @GetMapping("/start")
     public ResponseEntity<ApiBody> startTask(@RequestParam("zipName") String zipName) {
@@ -40,6 +41,8 @@ public class DistributorController {
 
         System.out.println("Получена новая задача. Архив: " + zipName);
         distributorService.startTask(zipName);
+
+        startTime = System.currentTimeMillis();
 
         ApiBody response = new ApiBody("Задача запущена", HttpStatus.OK.value(), null);
         return new ResponseEntity<>(response, HttpStatus.OK);
@@ -75,6 +78,10 @@ public class DistributorController {
         taskManager.removeCompetedTask(task);
         distributorJarService.executeProcessResult(resultNode.toString());
         if (taskManager.getFinalEnd().equals(new BigInteger(task.getEnd()))) distributorService.stopGlobalTask();
+
+        long endTime = System.currentTimeMillis();
+        long duration = endTime - startTime;
+        System.out.println("Время выполнения: " + duration + " миллисекунд");
 
         ApiBody response = new ApiBody("Результат получен", HttpStatus.OK.value(), null);
         return new ResponseEntity<>(response, HttpStatus.OK);

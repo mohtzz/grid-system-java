@@ -44,10 +44,10 @@ public class ParallelGraphRouteFinder {
         }
 
         executor.shutdown();
-        return createJsonResponse(results);
+        return createJsonResponse(results, startRange, endRange);
     }
 
-    private static ObjectNode createJsonResponse(List<RouteResult> results) {
+    private static ObjectNode createJsonResponse(List<RouteResult> results, int startRange, int endRange) {
         ObjectNode response = factory.objectNode();
 
         if (results.isEmpty()) {
@@ -57,12 +57,20 @@ public class ParallelGraphRouteFinder {
 
         RouteResult bestRoute = Collections.min(results, Comparator.comparingInt(r -> r.cost));
 
+
+        if (bestRoute.route != null && !bestRoute.route.isEmpty()) {
+            int firstCity = bestRoute.route.get(0);
+            if (firstCity < startRange || firstCity >= endRange) {
+                response.put("error", "Invalid route start city: " + firstCity);
+                return response;
+            }
+        }
+
         ArrayNode routeArray = factory.arrayNode();
         bestRoute.route.forEach(routeArray::add);
         response.set("route", routeArray);
 
         response.put("totalCost", bestRoute.cost);
-        response.put("processedCities", results.size());
 
         return response;
     }
@@ -102,18 +110,23 @@ public class ParallelGraphRouteFinder {
         visited[startCity] = true;
 
         AtomicReference<RouteResult> bestResult = new AtomicReference<>(new RouteResult(null, Integer.MAX_VALUE));
-        findRoutes(matrix, startCity, visited, currentRoute, 0, bestResult);
+        findRoutes(matrix, startCity, visited, currentRoute, 0, bestResult, startCity);
 
         return bestResult.get().route != null ? bestResult.get() : null;
     }
 
     private static void findRoutes(int[][] matrix, int currentCity,
                                    boolean[] visited, List<Integer> currentRoute,
-                                   int currentCost, AtomicReference<RouteResult> bestResult) {
+                                   int currentCost, AtomicReference<RouteResult> bestResult,
+                                   int startCity) {
         if (currentRoute.size() == matrix.length) {
+            int finalCost = currentCost + matrix[currentCity][startCity];
+            List<Integer> finalRoute = new ArrayList<>(currentRoute);
+            finalRoute.add(startCity);
+
             synchronized (bestResult) {
-                if (currentCost < bestResult.get().cost) {
-                    bestResult.set(new RouteResult(new ArrayList<>(currentRoute), currentCost));
+                if (finalCost < bestResult.get().cost) {
+                    bestResult.set(new RouteResult(new ArrayList<>(finalRoute), finalCost));
                 }
             }
             return;
@@ -126,7 +139,7 @@ public class ParallelGraphRouteFinder {
                 int newCost = currentCost + matrix[currentCity][nextCity];
 
                 if (newCost < bestResult.get().cost) {
-                    findRoutes(matrix, nextCity, visited, currentRoute, newCost, bestResult);
+                    findRoutes(matrix, nextCity, visited, currentRoute, newCost, bestResult, startCity);
                 }
 
                 currentRoute.remove(currentRoute.size() - 1);

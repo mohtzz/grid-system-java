@@ -17,6 +17,8 @@ import org.springframework.util.MultiValueMap;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 public class DistributorService {
@@ -35,7 +37,8 @@ public class DistributorService {
     private String UPLOAD_PATH;
     private String zipName = null;
 
-    private static final long PROCESS_INTERVAL_MS = 10_000;
+//    private static final long PROCESS_INTERVAL_MS = 5_000;
+    private static final long PROCESS_INTERVAL_MS = 10;
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public String getZipName() {
@@ -58,23 +61,37 @@ public class DistributorService {
 
             System.out.println("Получено воркеров: " + workers.size());
 
-            for (Worker worker : workers) {
-                try {
+            ExecutorService executorService = Executors.newCachedThreadPool();
 
-                    if (worker.getWorkerStatus().equals(WorkerStatusEnum.UNINITIALIZED)) {
-                        System.out.println("Инициализация воркера: " + worker.fullAddress());
-                        initWorker(worker, zipName);
-                    } else if (worker.getWorkerStatus().equals(WorkerStatusEnum.FREE)) {
-                        System.out.println("Отправка задачи воркеру: " + worker.fullAddress());
-                        sendTask(worker);
+            for (Worker worker : workers) {
+                executorService.execute(() -> {
+                    try {
+                        if (worker.getWorkerStatus().equals(WorkerStatusEnum.UNINITIALIZED)) {
+                            System.out.println("Инициализация воркера: " + worker.fullAddress());
+                            initWorker(worker, zipName);
+                        } else if (worker.getWorkerStatus().equals(WorkerStatusEnum.FREE)) {
+                            System.out.println("Отправка задачи воркеру: " + worker.fullAddress());
+                            sendTask(worker);
+                        }
+                    } catch (Exception e) {
+                        System.out.println("Проблема с воркером " + worker.fullAddress() + ": " + e.getMessage());
                     }
-                } catch (Exception e) {
-                    System.out.println("Проблема с воркером " + worker.fullAddress() + ": " + e.getMessage());
+                });
+
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.out.println("Поток был прерван во время ожидания");
                 }
             }
 
+            // Не ждём завершения задач, сразу запускаем перераспределение
             taskManager.taskRedistribution(workers);
-            System.out.println("Завершена обработка всех воркеров");
+            System.out.println("Завершена постановка задач в очередь");
+
+            // Плавно завершаем ExecutorService (не блокируя текущий поток)
+            executorService.shutdown();
 
         } catch (Exception e) {
             System.out.println("Ошибка в процессе обработки: " + e.getMessage());
