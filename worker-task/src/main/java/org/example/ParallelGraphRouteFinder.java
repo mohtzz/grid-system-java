@@ -53,8 +53,8 @@ public class ParallelGraphRouteFinder {
     }
 
     private static RouteResult solveGenetic(int[][] matrix, int startCity) {
-        int populationSize = 50;
-        int generations = 100;
+        int populationSize = 100;
+        int generations = 200;
         double mutationRate = 0.1;
         int n = matrix.length;
 
@@ -73,6 +73,7 @@ public class ParallelGraphRouteFinder {
         for (int gen = 0; gen < generations; gen++) {
             // Оценка приспособленности
             for (List<Integer> route : population) {
+                if (route.get(0) != startCity) continue;
                 int cost = 0;
                 // Рассчитываем стоимость полного цикла (возврат в стартовый город)
                 for (int i = 0; i < route.size(); i++) {
@@ -142,7 +143,6 @@ public class ParallelGraphRouteFinder {
         int n = parent1.size();
         List<Integer> child = new ArrayList<>(Collections.nCopies(n, -1));
         child.set(0, startCity);
-
         int a = 1 + (int)(Math.random() * (n/2));
         int b = a + (int)(Math.random() * (n/2));
 
@@ -188,9 +188,9 @@ public class ParallelGraphRouteFinder {
 
         // Фильтруем результаты, оставляя только те, что начинаются в нужном диапазоне
         List<RouteResult> validResults = results.stream()
-                .filter(r -> r.route != null && !r.route.isEmpty()
-                        && r.route.get(0) >= startRange
-                        && r.route.get(0) < endRange)
+                .filter(r -> r.route != null
+                        && !r.route.isEmpty()
+                        && r.route.get(0) == startRange)  // Только строго начинающиеся с startRange
                 .toList();
 
         if (validResults.isEmpty()) {
