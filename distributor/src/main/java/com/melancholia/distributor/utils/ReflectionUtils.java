@@ -15,6 +15,8 @@ import java.util.List;
 
 public class ReflectionUtils {
 
+    private static final Logger log = LoggerFactory.getLogger(ReflectionUtils.class);
+
     public static List<Method> getAnnotatedMethodsByName(Path jarFilePath, String className, String annotationName) throws Exception {
         List<Method> annotatedMethods = new ArrayList<>();
 
@@ -28,7 +30,7 @@ public class ReflectionUtils {
         try {
             annotationClass = (Class<? extends Annotation>) Class.forName(annotationName, true, classLoader);
         } catch (ClassNotFoundException e) {
-            System.err.println("Annotation class not found: " + annotationName);
+            log.error("Annotation class not found: {}", annotationName);
             return annotatedMethods;
         }
 
@@ -54,7 +56,7 @@ public class ReflectionUtils {
                 instance = clazz.getDeclaredConstructor().newInstance();
             } catch (InstantiationException | IllegalAccessException | InvocationTargetException |
                      NoSuchMethodException e) {
-                System.err.println("Error: " + e.getMessage());
+                log.error("Error: {}", e.getMessage());
             }
         }
 
@@ -62,7 +64,7 @@ public class ReflectionUtils {
             return method.invoke(instance, args);
         } catch (Exception e) {
             e.printStackTrace();
-            System.err.println("Error invoking method " + method.getName() + ": " + e.getMessage());
+            log.error("Error invoking method {} : {}", method.getName(), e.getMessage());
             return null;
         }
     }
