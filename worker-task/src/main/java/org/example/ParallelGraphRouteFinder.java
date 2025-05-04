@@ -30,8 +30,6 @@ public class ParallelGraphRouteFinder {
             throw new IllegalArgumentException("Start range out of matrix bounds");
         }
 
-        // Выбираем алгоритм в зависимости от размера матрицы
-        boolean useGenetic = matrix.length > 15;
 
         ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         List<Future<RouteResult>> futures = new ArrayList<>();
@@ -39,11 +37,7 @@ public class ParallelGraphRouteFinder {
         int endRange = Math.min(startRange + batchSize, matrix.length);
         for (int startCity = startRange; startCity < endRange; startCity++) {
             final int currentStartCity = startCity;
-            futures.add(executor.submit(() -> {
-                return useGenetic ?
-                        solveGenetic(matrix, currentStartCity) :
-                        solveBranchAndBound(matrix, currentStartCity);
-            }));
+            futures.add(executor.submit(() -> solveGenetic(matrix, currentStartCity)));
         }
 
         List<RouteResult> results = new ArrayList<>();
@@ -55,58 +49,7 @@ public class ParallelGraphRouteFinder {
         }
 
         executor.shutdown();
-        return createJsonResponse(results, startRange, endRange, useGenetic);
-    }
-
-    // Branch and Bound реализация
-    private static RouteResult solveBranchAndBound(int[][] matrix, int startCity) {
-        class BnBSolver {
-            final int[][] matrix;
-            final int n;
-            RouteResult best;
-            final AtomicInteger counter = new AtomicInteger(0);
-
-            BnBSolver(int[][] matrix) {
-                this.matrix = matrix;
-                this.n = matrix.length;
-                this.best = new RouteResult(null, Integer.MAX_VALUE);
-            }
-
-            void solve(int current, int cost, boolean[] visited, List<Integer> path) {
-                if (path.size() == n) {
-                    int totalCost = cost + matrix[current][startCity];
-                    synchronized (this) {
-                        if (totalCost < best.cost) {
-                            List<Integer> newRoute = new ArrayList<>(path);
-                            newRoute.add(startCity);
-                            best = new RouteResult(newRoute, totalCost);
-                        }
-                    }
-                    return;
-                }
-
-                for (int next = 0; next < n; next++) {
-                    if (!visited[next] && matrix[current][next] > 0) {
-                        int newCost = cost + matrix[current][next];
-                        if (newCost < best.cost) {
-                            visited[next] = true;
-                            path.add(next);
-                            solve(next, newCost, visited, path);
-                            path.remove(path.size() - 1);
-                            visited[next] = false;
-                        }
-                    }
-                }
-            }
-        }
-
-        BnBSolver solver = new BnBSolver(matrix);
-        boolean[] visited = new boolean[matrix.length];
-        List<Integer> path = new ArrayList<>();
-        path.add(startCity);
-        visited[startCity] = true;
-        solver.solve(startCity, 0, visited, path);
-        return solver.best.route != null ? solver.best : null;
+        return createJsonResponse(results, startRange, endRange);
     }
 
     private static RouteResult solveGenetic(int[][] matrix, int startCity) {
@@ -236,7 +179,7 @@ public class ParallelGraphRouteFinder {
     }
 
     // Остальные методы остаются без изменений
-    private static ObjectNode createJsonResponse(List<RouteResult> results, int startRange, int endRange, boolean geneticUsed) {
+    private static ObjectNode createJsonResponse(List<RouteResult> results, int startRange, int endRange) {
         ObjectNode response = factory.objectNode();
         if (results.isEmpty()) {
             response.put("error", "No valid routes found");
@@ -260,7 +203,6 @@ public class ParallelGraphRouteFinder {
         bestRoute.route.forEach(routeArray::add);
         response.set("route", routeArray);
         response.put("totalCost", bestRoute.cost);
-        response.put("algorithm", geneticUsed ? "GeneticAlgorithm" : "BranchAndBound");
         return response;
     }
 
