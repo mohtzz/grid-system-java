@@ -42,28 +42,56 @@ public class ResultSaver {
 
     @Process
     public static void saveIfBetter(String currentResultJson) throws IOException {
+        // 1. Проверка входных данных
         if (currentResultJson == null || currentResultJson.isEmpty()) {
             throw new IllegalArgumentException("Result JSON string cannot be null or empty");
         }
 
-        JsonNode currentResult = objectMapper.readTree(currentResultJson);
+        // 2. Парсинг JSON строки
+        JsonNode currentResult;
+        try {
+            currentResult = objectMapper.readTree(currentResultJson);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Invalid JSON format", e);
+        }
+
+        // 3. Проверка обязательных полей
         if (!currentResult.has("totalCost") || !currentResult.has("route")) {
             throw new IllegalArgumentException("Result must contain 'totalCost' and 'route' fields");
         }
 
+        int currentCost = currentResult.get("totalCost").asInt();
+
+        // 4. Обработка случая, когда файла не существует
         if (!Files.exists(RESULT_FILE)) {
             saveResult(currentResultJson);
+            System.out.println("Файл не существовал, сохранен новый результат");
             return;
         }
 
+        // 5. Чтение существующего результата
         try {
             String existingJson = Files.readString(RESULT_FILE);
             JsonNode existingResult = objectMapper.readTree(existingJson);
-            if (existingResult.has("totalCost") &&
-                    currentResult.get("totalCost").asInt() < existingResult.get("totalCost").asInt()) {
+
+            if (!existingResult.has("totalCost")) {
+                System.out.println("Существующий файл поврежден, будет перезаписан");
                 saveResult(currentResultJson);
+                return;
+            }
+
+            int existingCost = existingResult.get("totalCost").asInt();
+
+            // 6. Сравнение и сохранение
+            if (currentCost < existingCost) {
+                saveResult(currentResultJson);
+                System.out.println("Найден более оптимальный маршрут! Файл обновлен.");
+            } else {
+                System.out.println("Текущий результат не лучше существующего.");
             }
         } catch (IOException e) {
+            System.err.println("Ошибка чтения файла результатов: " + e.getMessage());
+            System.out.println("Создаем новый файл результатов");
             saveResult(currentResultJson);
         }
     }
