@@ -9,12 +9,11 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 public class ParallelGraphRouteFinder {
-
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
     private static final JsonNodeFactory factory = JsonNodeFactory.instance;
@@ -26,13 +25,25 @@ public class ParallelGraphRouteFinder {
         int[][] matrix = loadMatrixFromZip(archivePath);
         validateParameters(matrix, startRange, batchSize);
 
+        // Добавляем проверку, что стартовый город в пределах матрицы
+        if (startRange < 0 || startRange >= matrix.length) {
+            throw new IllegalArgumentException("Start range out of matrix bounds");
+        }
+
+        // Выбираем алгоритм в зависимости от размера матрицы
+        boolean useGenetic = matrix.length > 15;
+
         ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         List<Future<RouteResult>> futures = new ArrayList<>();
 
         int endRange = Math.min(startRange + batchSize, matrix.length);
         for (int startCity = startRange; startCity < endRange; startCity++) {
             final int currentStartCity = startCity;
-            futures.add(executor.submit(() -> findBestRoute(matrix, currentStartCity)));
+            futures.add(executor.submit(() -> {
+                return useGenetic ?
+                        solveGenetic(matrix, currentStartCity) :
+                        solveBranchAndBound(matrix, currentStartCity);
+            }));
         }
 
         List<RouteResult> results = new ArrayList<>();
@@ -44,41 +55,218 @@ public class ParallelGraphRouteFinder {
         }
 
         executor.shutdown();
-        return createJsonResponse(results, startRange, endRange);
+        return createJsonResponse(results, startRange, endRange, useGenetic);
     }
 
-    private static ObjectNode createJsonResponse(List<RouteResult> results, int startRange, int endRange) {
-        ObjectNode response = factory.objectNode();
+    // Branch and Bound реализация
+    private static RouteResult solveBranchAndBound(int[][] matrix, int startCity) {
+        class BnBSolver {
+            final int[][] matrix;
+            final int n;
+            RouteResult best;
+            final AtomicInteger counter = new AtomicInteger(0);
 
+            BnBSolver(int[][] matrix) {
+                this.matrix = matrix;
+                this.n = matrix.length;
+                this.best = new RouteResult(null, Integer.MAX_VALUE);
+            }
+
+            void solve(int current, int cost, boolean[] visited, List<Integer> path) {
+                if (path.size() == n) {
+                    int totalCost = cost + matrix[current][startCity];
+                    synchronized (this) {
+                        if (totalCost < best.cost) {
+                            List<Integer> newRoute = new ArrayList<>(path);
+                            newRoute.add(startCity);
+                            best = new RouteResult(newRoute, totalCost);
+                        }
+                    }
+                    return;
+                }
+
+                for (int next = 0; next < n; next++) {
+                    if (!visited[next] && matrix[current][next] > 0) {
+                        int newCost = cost + matrix[current][next];
+                        if (newCost < best.cost) {
+                            visited[next] = true;
+                            path.add(next);
+                            solve(next, newCost, visited, path);
+                            path.remove(path.size() - 1);
+                            visited[next] = false;
+                        }
+                    }
+                }
+            }
+        }
+
+        BnBSolver solver = new BnBSolver(matrix);
+        boolean[] visited = new boolean[matrix.length];
+        List<Integer> path = new ArrayList<>();
+        path.add(startCity);
+        visited[startCity] = true;
+        solver.solve(startCity, 0, visited, path);
+        return solver.best.route != null ? solver.best : null;
+    }
+
+    private static RouteResult solveGenetic(int[][] matrix, int startCity) {
+        int populationSize = 50;
+        int generations = 100;
+        double mutationRate = 0.1;
+        int n = matrix.length;
+
+        // Генерация начальной популяции
+        List<List<Integer>> population = new ArrayList<>();
+        for (int i = 0; i < populationSize; i++) {
+            List<Integer> route = new ArrayList<>();
+            for (int j = 0; j < n; j++) if (j != startCity) route.add(j);
+            Collections.shuffle(route);
+            route.add(0, startCity);
+            population.add(route);
+        }
+
+        RouteResult best = new RouteResult(null, Integer.MAX_VALUE);
+
+        for (int gen = 0; gen < generations; gen++) {
+            // Оценка приспособленности
+            for (List<Integer> route : population) {
+                int cost = 0;
+                // Рассчитываем стоимость полного цикла (возврат в стартовый город)
+                for (int i = 0; i < route.size(); i++) {
+                    int from = route.get(i);
+                    int to = route.get((i + 1) % route.size()); // Замыкаем цикл
+                    cost += matrix[from][to];
+                }
+
+                if (cost < best.cost) {
+                    best = new RouteResult(new ArrayList<>(route), cost);
+                }
+            }
+
+            // Селекция и скрещивание
+            List<List<Integer>> newPopulation = new ArrayList<>();
+            while (newPopulation.size() < populationSize) {
+                List<Integer> parent1 = selectParent(population, matrix);
+                List<Integer> parent2 = selectParent(population, matrix);
+                List<Integer> child = crossover(parent1, parent2, startCity);
+                mutate(child, mutationRate, startCity);
+                newPopulation.add(child);
+            }
+            population = newPopulation;
+        }
+
+        // После завершения всех поколений
+        if (best.route != null) {
+            // Убедимся, что маршрут начинается с startCity
+            if (best.route.get(0) != startCity) {
+                best.route.remove(Integer.valueOf(startCity)); // Удаляем если был в другом месте
+                best.route.add(0, startCity); // Добавляем в начало
+            }
+            best.route.add(startCity); // Замыкаем цикл
+            best.cost = calculateRouteCost(matrix, best.route);
+
+            // Дополнительная проверка диапазона
+            if (best.route.get(0) != startCity) {
+                return null;
+            }
+        }
+
+        return best.route != null ? best : null;
+    }
+
+    // Правильный расчет стоимости для полного цикла
+    private static int calculateRouteCost(int[][] matrix, List<Integer> route) {
+        int cost = 0;
+        for (int i = 0; i < route.size() - 1; i++) {
+            cost += matrix[route.get(i)][route.get(i+1)];
+        }
+        // Добавляем стоимость возврата в начальный город
+        cost += matrix[route.get(route.size()-1)][route.get(0)];
+        return cost;
+    }
+
+    private static List<Integer> selectParent(List<List<Integer>> population, int[][] matrix) {
+        // Турнирная селекция
+        Collections.shuffle(population);
+        return population.stream()
+                .limit(3)
+                .min(Comparator.comparingInt(r -> calculateRouteCost(matrix, r)))
+                .orElse(population.get(0));
+    }
+
+    private static List<Integer> crossover(List<Integer> parent1, List<Integer> parent2, int startCity) {
+        // Упорядоченный кроссинговер с проверкой диапазона
+        int n = parent1.size();
+        List<Integer> child = new ArrayList<>(Collections.nCopies(n, -1));
+        child.set(0, startCity);
+
+        int a = 1 + (int)(Math.random() * (n/2));
+        int b = a + (int)(Math.random() * (n/2));
+
+        // Копируем сегмент только из допустимых городов
+        for (int i = a; i <= b && i < parent1.size(); i++) {
+            int city = parent1.get(i);
+            if (city != startCity) {
+                child.set(i, city);
+            }
+        }
+
+        // Заполняем оставшиеся позиции
+        int currentPos = 1;
+        for (int city : parent2) {
+            if (city != startCity && !child.contains(city)) {
+                while (currentPos < n && child.get(currentPos) != -1) {
+                    currentPos++;
+                }
+                if (currentPos < n) {
+                    child.set(currentPos, city);
+                }
+            }
+        }
+
+        return child;
+    }
+
+    private static void mutate(List<Integer> route, double mutationRate, int startCity) {
+        if (Math.random() < mutationRate) {
+            int i = 1 + (int)(Math.random() * (route.size()-2));
+            int j = 1 + (int)(Math.random() * (route.size()-2));
+            Collections.swap(route, i, j);
+        }
+    }
+
+    // Остальные методы остаются без изменений
+    private static ObjectNode createJsonResponse(List<RouteResult> results, int startRange, int endRange, boolean geneticUsed) {
+        ObjectNode response = factory.objectNode();
         if (results.isEmpty()) {
             response.put("error", "No valid routes found");
             return response;
         }
 
-        RouteResult bestRoute = Collections.min(results, Comparator.comparingInt(r -> r.cost));
+        // Фильтруем результаты, оставляя только те, что начинаются в нужном диапазоне
+        List<RouteResult> validResults = results.stream()
+                .filter(r -> r.route != null && !r.route.isEmpty()
+                        && r.route.get(0) >= startRange
+                        && r.route.get(0) < endRange)
+                .toList();
 
-
-        if (bestRoute.route != null && !bestRoute.route.isEmpty()) {
-            int firstCity = bestRoute.route.get(0);
-            if (firstCity < startRange || firstCity >= endRange) {
-                response.put("error", "Invalid route start city: " + firstCity);
-                return response;
-            }
+        if (validResults.isEmpty()) {
+            response.put("error", "No routes found within specified range");
+            return response;
         }
 
+        RouteResult bestRoute = Collections.min(validResults, Comparator.comparingInt(r -> r.cost));
         ArrayNode routeArray = factory.arrayNode();
         bestRoute.route.forEach(routeArray::add);
         response.set("route", routeArray);
-
         response.put("totalCost", bestRoute.cost);
-
+        response.put("algorithm", geneticUsed ? "GeneticAlgorithm" : "BranchAndBound");
         return response;
     }
 
     private static int[][] loadMatrixFromZip(Path archivePath) throws IOException {
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
             Enumeration<? extends ZipEntry> entries = zipFile.entries();
-
             while (entries.hasMoreElements()) {
                 ZipEntry entry = entries.nextElement();
                 if (!entry.isDirectory() && entry.getName().endsWith(".json")) {
@@ -103,51 +291,6 @@ public class ParallelGraphRouteFinder {
         }
     }
 
-    private static RouteResult findBestRoute(int[][] matrix, int startCity) {
-        boolean[] visited = new boolean[matrix.length];
-        List<Integer> currentRoute = new ArrayList<>();
-        currentRoute.add(startCity);
-        visited[startCity] = true;
-
-        AtomicReference<RouteResult> bestResult = new AtomicReference<>(new RouteResult(null, Integer.MAX_VALUE));
-        findRoutes(matrix, startCity, visited, currentRoute, 0, bestResult, startCity);
-
-        return bestResult.get().route != null ? bestResult.get() : null;
-    }
-
-    private static void findRoutes(int[][] matrix, int currentCity,
-                                   boolean[] visited, List<Integer> currentRoute,
-                                   int currentCost, AtomicReference<RouteResult> bestResult,
-                                   int startCity) {
-        if (currentRoute.size() == matrix.length) {
-            int finalCost = currentCost + matrix[currentCity][startCity];
-            List<Integer> finalRoute = new ArrayList<>(currentRoute);
-            finalRoute.add(startCity);
-
-            synchronized (bestResult) {
-                if (finalCost < bestResult.get().cost) {
-                    bestResult.set(new RouteResult(new ArrayList<>(finalRoute), finalCost));
-                }
-            }
-            return;
-        }
-
-        for (int nextCity = 0; nextCity < matrix.length; nextCity++) {
-            if (!visited[nextCity] && matrix[currentCity][nextCity] > 0) {
-                visited[nextCity] = true;
-                currentRoute.add(nextCity);
-                int newCost = currentCost + matrix[currentCity][nextCity];
-
-                if (newCost < bestResult.get().cost) {
-                    findRoutes(matrix, nextCity, visited, currentRoute, newCost, bestResult, startCity);
-                }
-
-                currentRoute.remove(currentRoute.size() - 1);
-                visited[nextCity] = false;
-            }
-        }
-    }
-
     static class RouteResult {
         List<Integer> route;
         int cost;
@@ -157,5 +300,4 @@ public class ParallelGraphRouteFinder {
             this.cost = cost;
         }
     }
-
 }
