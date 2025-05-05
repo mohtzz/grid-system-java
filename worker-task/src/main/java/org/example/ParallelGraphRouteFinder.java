@@ -25,7 +25,6 @@ public class ParallelGraphRouteFinder {
         int[][] matrix = loadMatrixFromZip(archivePath);
         validateParameters(matrix, startRange, batchSize);
 
-        // Добавляем проверку, что стартовый город в пределах матрицы
         if (startRange < 0 || startRange >= matrix.length) {
             throw new IllegalArgumentException("Start range out of matrix bounds");
         }
@@ -58,7 +57,6 @@ public class ParallelGraphRouteFinder {
         double mutationRate = 0.1;
         int n = matrix.length;
 
-        // Генерация начальной популяции
         List<List<Integer>> population = new ArrayList<>();
         for (int i = 0; i < populationSize; i++) {
             List<Integer> route = new ArrayList<>();
@@ -71,14 +69,12 @@ public class ParallelGraphRouteFinder {
         RouteResult best = new RouteResult(null, Integer.MAX_VALUE);
 
         for (int gen = 0; gen < generations; gen++) {
-            // Оценка приспособленности
             for (List<Integer> route : population) {
                 if (route.get(0) != startCity) continue;
                 int cost = 0;
-                // Рассчитываем стоимость полного цикла (возврат в стартовый город)
                 for (int i = 0; i < route.size(); i++) {
                     int from = route.get(i);
-                    int to = route.get((i + 1) % route.size()); // Замыкаем цикл
+                    int to = route.get((i + 1) % route.size());
                     cost += matrix[from][to];
                 }
 
@@ -87,7 +83,6 @@ public class ParallelGraphRouteFinder {
                 }
             }
 
-            // Селекция и скрещивание
             List<List<Integer>> newPopulation = new ArrayList<>();
             while (newPopulation.size() < populationSize) {
                 List<Integer> parent1 = selectParent(population, matrix);
@@ -99,17 +94,14 @@ public class ParallelGraphRouteFinder {
             population = newPopulation;
         }
 
-        // После завершения всех поколений
         if (best.route != null) {
-            // Убедимся, что маршрут начинается с startCity
             if (best.route.get(0) != startCity) {
-                best.route.remove(Integer.valueOf(startCity)); // Удаляем если был в другом месте
-                best.route.add(0, startCity); // Добавляем в начало
+                best.route.remove(Integer.valueOf(startCity));
+                best.route.add(0, startCity);
             }
             best.route.add(startCity); // Замыкаем цикл
             best.cost = calculateRouteCost(matrix, best.route);
 
-            // Дополнительная проверка диапазона
             if (best.route.get(0) != startCity) {
                 return null;
             }
@@ -118,19 +110,16 @@ public class ParallelGraphRouteFinder {
         return best.route != null ? best : null;
     }
 
-    // Правильный расчет стоимости для полного цикла
     private static int calculateRouteCost(int[][] matrix, List<Integer> route) {
         int cost = 0;
         for (int i = 0; i < route.size() - 1; i++) {
             cost += matrix[route.get(i)][route.get(i+1)];
         }
-        // Добавляем стоимость возврата в начальный город
         cost += matrix[route.get(route.size()-1)][route.get(0)];
         return cost;
     }
 
     private static List<Integer> selectParent(List<List<Integer>> population, int[][] matrix) {
-        // Турнирная селекция
         Collections.shuffle(population);
         return population.stream()
                 .limit(3)
@@ -139,14 +128,12 @@ public class ParallelGraphRouteFinder {
     }
 
     private static List<Integer> crossover(List<Integer> parent1, List<Integer> parent2, int startCity) {
-        // Упорядоченный кроссинговер с проверкой диапазона
         int n = parent1.size();
         List<Integer> child = new ArrayList<>(Collections.nCopies(n, -1));
         child.set(0, startCity);
         int a = 1 + (int)(Math.random() * (n/2));
         int b = a + (int)(Math.random() * (n/2));
 
-        // Копируем сегмент только из допустимых городов
         for (int i = a; i <= b && i < parent1.size(); i++) {
             int city = parent1.get(i);
             if (city != startCity) {
@@ -154,7 +141,6 @@ public class ParallelGraphRouteFinder {
             }
         }
 
-        // Заполняем оставшиеся позиции
         int currentPos = 1;
         for (int city : parent2) {
             if (city != startCity && !child.contains(city)) {
@@ -178,7 +164,6 @@ public class ParallelGraphRouteFinder {
         }
     }
 
-    // Остальные методы остаются без изменений
     private static ObjectNode createJsonResponse(List<RouteResult> results, int startRange, int endRange) {
         ObjectNode response = factory.objectNode();
         if (results.isEmpty()) {
@@ -186,11 +171,10 @@ public class ParallelGraphRouteFinder {
             return response;
         }
 
-        // Фильтруем результаты, оставляя только те, что начинаются в нужном диапазоне
         List<RouteResult> validResults = results.stream()
                 .filter(r -> r.route != null
                         && !r.route.isEmpty()
-                        && r.route.get(0) == startRange)  // Только строго начинающиеся с startRange
+                        && r.route.get(0) == startRange)
                 .toList();
 
         if (validResults.isEmpty()) {
