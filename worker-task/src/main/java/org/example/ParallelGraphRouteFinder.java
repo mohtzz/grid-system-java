@@ -62,7 +62,6 @@ public class ParallelGraphRouteFinder {
         response.set("route", routeArray);
 
         response.put("totalCost", bestRoute.cost);
-        response.put("processedCities", results.size());
 
         return response;
     }
