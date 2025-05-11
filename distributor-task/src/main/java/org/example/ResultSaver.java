@@ -20,8 +20,13 @@ public class ResultSaver {
     private static final Path RESULT_FILE = Paths.get("best_routes.json");
 
 
+    public static class GraphData {
+        public int[][] matrix;
+        public int city;
+    }
+
     @End
-    public static int countCitiesInZip(String requestJson) throws IOException {
+    public static int countPossibleRoutesInZip(String requestJson) throws IOException {
         JsonNode jsonNode = objectMapper.readTree(requestJson);
         String zipPath = jsonNode.path("dataZip").asText();
 
@@ -37,14 +42,30 @@ public class ResultSaver {
             }
 
             try (InputStream is = zipFile.getInputStream(jsonEntry)) {
-                int[][] matrix = objectMapper.readValue(is, int[][].class);
-                if (matrix == null || matrix.length == 0) {
+                GraphData graphData = objectMapper.readValue(is, GraphData.class);
+
+                if (graphData.matrix == null || graphData.matrix.length == 0) {
                     throw new IOException("Матрица городов пуста или некорректна");
                 }
-                return matrix.length;
+
+                int cityCount = graphData.matrix.length;
+
+                // Для задачи коммивояжера количество возможных маршрутов:
+                // (n-1)! / 2 для симметричной матрицы (учитываем обратные маршруты)
+                // или (n-1)! для асимметричной
+
+                boolean isSymmetric = isMatrixSymmetric(graphData.matrix);
+                int possibleRoutes = factorial(cityCount - 1);
+
+                if (isSymmetric) {
+                    possibleRoutes /= 2;
+                }
+
+                return possibleRoutes;
             }
         }
     }
+
 
     private static ZipEntry findFirstJsonEntry(ZipFile zipFile) {
         Enumeration<? extends ZipEntry> entries = zipFile.entries();
@@ -57,7 +78,25 @@ public class ResultSaver {
         return null;
     }
 
+    private static boolean isMatrixSymmetric(int[][] matrix) {
+        for (int i = 0; i < matrix.length; i++) {
+            for (int j = 0; j < i; j++) {
+                if (matrix[i][j] != matrix[j][i]) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
+    private static int factorial(int n) {
+        if (n < 0) return 0;
+        int result = 1;
+        for (int i = 2; i <= n; i++) {
+            result *= i;
+        }
+        return result;
+    }
 
     @Process
     public static void saveIfBetter(String currentResultJson) throws IOException {
@@ -75,8 +114,8 @@ public class ResultSaver {
         }
 
         // 3. Проверка обязательных полей
-        if (!currentResult.has("totalCost") || !currentResult.has("route")) {
-            throw new IllegalArgumentException("Result must contain 'totalCost' and 'route' fields");
+        if (!currentResult.has("totalCost") || !currentResult.has("optimalPath")) {
+            throw new IllegalArgumentException("Result must contain 'totalCost' and 'optimalPath' fields");
         }
 
         int currentCost = currentResult.get("totalCost").asInt();
@@ -105,8 +144,11 @@ public class ResultSaver {
             if (currentCost < existingCost) {
                 saveResult(currentResultJson);
                 System.out.println("Найден более оптимальный маршрут! Файл обновлен.");
+                System.out.println("Новая стоимость: " + currentCost + " (было: " + existingCost + ")");
+                System.out.println("Обработано перестановок: " + currentResult.get("processedPermutations").asInt());
             } else {
-                System.out.println("Текущий результат не лучше существующего.");
+                System.out.println("Текущий результат не лучше существующего (текущий: " +
+                        currentCost + ", существующий: " + existingCost + ")");
             }
         } catch (IOException e) {
             System.err.println("Ошибка чтения файла результатов: " + e.getMessage());
@@ -117,7 +159,10 @@ public class ResultSaver {
 
     private static void saveResult(String json) throws IOException {
         try {
-            Files.writeString(RESULT_FILE, json, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.writeString(RESULT_FILE, json,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING);
+            System.out.println("Результат успешно сохранен в " + RESULT_FILE);
         } catch (IOException e) {
             System.err.println("Ошибка сохранения результата: " + e.getMessage());
             throw e;

@@ -37,7 +37,7 @@ public class WorkerService {
             finalResult.set("task", mapper.valueToTree(task));
 
             ApiBody response = restApiClient.postRequest(task.getCallbackUrl(), finalResult, ApiBody.class);
-
+            System.out.println(finalResult);
             System.out.println("Задача " + task.getStart() + ":" + task.getEnd() +
                     " успешно решена. Ответ: " + response.getMessage());
 

@@ -19,54 +19,86 @@ public class ParallelGraphRouteFinder {
     private static final int THREAD_POOL_SIZE = Runtime.getRuntime().availableProcessors();
     private static final JsonNodeFactory factory = JsonNodeFactory.instance;
 
-    @Solve
     public static ObjectNode findCheapestRoutesParallel(Path archivePath, int startRange, int batchSize)
             throws IOException, ExecutionException, InterruptedException {
 
-        int[][] matrix = loadMatrixFromZip(archivePath);
+        // Загружаем матрицу и получаем стартовый город
+        MatrixData matrixData = loadMatrixFromZip(archivePath);
+        int[][] matrix = matrixData.array;
+        int startCity = matrixData.city;
+
         validateParameters(matrix, startRange, batchSize);
 
-        ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-        List<Future<RouteResult>> futures = new ArrayList<>();
-
-        int endRange = Math.min(startRange + batchSize, matrix.length);
-        for (int startCity = startRange; startCity < endRange; startCity++) {
-            final int currentStartCity = startCity;
-            futures.add(executor.submit(() -> findBestRoute(matrix, currentStartCity)));
+        // Вычисляем общее количество перестановок и проверяем границы
+        long totalPermutations = factorial(matrix.length - 1);
+        if (startRange < 0 || startRange >= totalPermutations) {
+            throw new IllegalArgumentException("Start range out of bounds");
         }
+        long endRange = Math.min(startRange + batchSize, totalPermutations);
 
-        List<RouteResult> results = new ArrayList<>();
-        for (Future<RouteResult> future : futures) {
-            RouteResult result = future.get();
-            if (result != null) {
-                results.add(result);
+        ExecutorService executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+        AtomicReference<RouteResult> bestResult = new AtomicReference<>(new RouteResult(null, Integer.MAX_VALUE));
+
+        // Создаем задачу для обработки части перестановок
+        Future<?> future = executor.submit(() -> {
+            findRoutesInRange(matrix, startCity, startRange, endRange, bestResult);
+        });
+
+        future.get(); // Ждем завершения задачи
+        executor.shutdown();
+
+        return createJsonResponse(Collections.singletonList(bestResult.get()));
+    }
+
+    private static void findRoutesInRange(int[][] matrix, int startCity, long startRange, long endRange,
+                                          AtomicReference<RouteResult> bestResult) {
+        int n = matrix.length;
+        List<Integer> cities = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            if (i != startCity) {
+                cities.add(i);
             }
         }
 
-        executor.shutdown();
-        return createJsonResponse(results);
-    }
+        // Используем итератор перестановок с пропуском первых startRange перестановок
+        PermutationIterator permIterator = new PermutationIterator(cities, startRange);
+        long count = 0;
 
-    private static ObjectNode createJsonResponse(List<RouteResult> results) {
-        ObjectNode response = factory.objectNode();
+        while (permIterator.hasNext() && count < (endRange - startRange)) {
+            List<Integer> permutation = permIterator.next();
+            count++;
 
-        if (results.isEmpty()) {
-            response.put("error", "No valid routes found");
-            return response;
+            // Строим полный маршрут (стартовый город + перестановка)
+            List<Integer> route = new ArrayList<>();
+            route.add(startCity);
+            route.addAll(permutation);
+
+            // Вычисляем стоимость маршрута
+            int cost = calculateRouteCost(matrix, route);
+
+            // Обновляем лучший результат, если нашли лучше
+            synchronized (bestResult) {
+                if (cost < bestResult.get().cost) {
+                    bestResult.set(new RouteResult(new ArrayList<>(route), cost));
+                }
+            }
         }
-
-        RouteResult bestRoute = Collections.min(results, Comparator.comparingInt(r -> r.cost));
-
-        ArrayNode routeArray = factory.arrayNode();
-        bestRoute.route.forEach(routeArray::add);
-        response.set("route", routeArray);
-
-        response.put("totalCost", bestRoute.cost);
-
-        return response;
     }
 
-    private static int[][] loadMatrixFromZip(Path archivePath) throws IOException {
+    private static int calculateRouteCost(int[][] matrix, List<Integer> route) {
+        int cost = 0;
+        for (int i = 0; i < route.size() - 1; i++) {
+            int from = route.get(i);
+            int to = route.get(i + 1);
+            if (matrix[from][to] == 0) {
+                return Integer.MAX_VALUE; // Нет пути, маршрут невалиден
+            }
+            cost += matrix[from][to];
+        }
+        return cost;
+    }
+
+    private static MatrixData loadMatrixFromZip(Path archivePath) throws IOException {
         try (ZipFile zipFile = new ZipFile(archivePath.toFile())) {
             Enumeration<? extends ZipEntry> entries = zipFile.entries();
 
@@ -74,7 +106,7 @@ public class ParallelGraphRouteFinder {
                 ZipEntry entry = entries.nextElement();
                 if (!entry.isDirectory() && entry.getName().endsWith(".json")) {
                     try (InputStream is = zipFile.getInputStream(entry)) {
-                        return objectMapper.readValue(is, int[][].class);
+                        return objectMapper.readValue(is, MatrixData.class);
                     }
                 }
             }
@@ -86,52 +118,36 @@ public class ParallelGraphRouteFinder {
         if (matrix == null || matrix.length == 0) {
             throw new IllegalArgumentException("Invalid adjacency matrix");
         }
-        if (startRange < 0 || startRange >= matrix.length) {
-            throw new IllegalArgumentException("Start range out of bounds");
-        }
         if (batchSize <= 0) {
             throw new IllegalArgumentException("Batch size must be positive");
         }
     }
 
-    private static RouteResult findBestRoute(int[][] matrix, int startCity) {
-        boolean[] visited = new boolean[matrix.length];
-        List<Integer> currentRoute = new ArrayList<>();
-        currentRoute.add(startCity);
-        visited[startCity] = true;
+    private static ObjectNode createJsonResponse(List<RouteResult> results) {
+        ObjectNode response = factory.objectNode();
 
-        AtomicReference<RouteResult> bestResult = new AtomicReference<>(new RouteResult(null, Integer.MAX_VALUE));
-        findRoutes(matrix, startCity, visited, currentRoute, 0, bestResult);
+        if (results.isEmpty() || results.get(0).route == null) {
+            response.put("error", "No valid routes found");
+            return response;
+        }
 
-        return bestResult.get().route != null ? bestResult.get() : null;
+        RouteResult bestRoute = results.get(0);
+
+        ArrayNode routeArray = factory.arrayNode();
+        bestRoute.route.forEach(routeArray::add);
+        response.set("route", routeArray);
+
+        response.put("totalCost", bestRoute.cost);
+
+        return response;
     }
 
-    private static void findRoutes(int[][] matrix, int currentCity,
-                                   boolean[] visited, List<Integer> currentRoute,
-                                   int currentCost, AtomicReference<RouteResult> bestResult) {
-        if (currentRoute.size() == matrix.length) {
-            synchronized (bestResult) {
-                if (currentCost < bestResult.get().cost) {
-                    bestResult.set(new RouteResult(new ArrayList<>(currentRoute), currentCost));
-                }
-            }
-            return;
+    private static long factorial(int n) {
+        long result = 1;
+        for (int i = 2; i <= n; i++) {
+            result *= i;
         }
-
-        for (int nextCity = 0; nextCity < matrix.length; nextCity++) {
-            if (!visited[nextCity] && matrix[currentCity][nextCity] > 0) {
-                visited[nextCity] = true;
-                currentRoute.add(nextCity);
-                int newCost = currentCost + matrix[currentCity][nextCity];
-
-                if (newCost < bestResult.get().cost) {
-                    findRoutes(matrix, nextCity, visited, currentRoute, newCost, bestResult);
-                }
-
-                currentRoute.remove(currentRoute.size() - 1);
-                visited[nextCity] = false;
-            }
-        }
+        return result;
     }
 
     static class RouteResult {
@@ -144,4 +160,81 @@ public class ParallelGraphRouteFinder {
         }
     }
 
+    static class MatrixData {
+        public int[][] array;
+        public int city;
+    }
+
+    // Итератор перестановок с возможностью пропустить первые N перестановок
+    static class PermutationIterator implements Iterator<List<Integer>> {
+        private List<Integer> elements;
+        private int[] indices;
+        private long skipped;
+        private boolean hasNext;
+
+        public PermutationIterator(List<Integer> elements, long skip) {
+            this.elements = new ArrayList<>(elements);
+            this.indices = new int[elements.size()];
+            this.skipped = 0;
+            this.hasNext = true;
+
+            // Пропускаем первые skip перестановок
+            while (skipped < skip && hasNext) {
+                hasNext = nextPermutation();
+                skipped++;
+            }
+        }
+
+        @Override
+        public boolean hasNext() {
+            return hasNext;
+        }
+
+        @Override
+        public List<Integer> next() {
+            if (!hasNext) {
+                throw new NoSuchElementException();
+            }
+
+            List<Integer> result = new ArrayList<>();
+            for (int i = 0; i < indices.length; i++) {
+                result.add(elements.get(indices[i]));
+            }
+
+            hasNext = nextPermutation();
+            return result;
+        }
+
+        private boolean nextPermutation() {
+            int i = indices.length - 2;
+            while (i >= 0 && indices[i] >= indices[i + 1]) {
+                i--;
+            }
+
+            if (i < 0) {
+                return false;
+            }
+
+            int j = indices.length - 1;
+            while (indices[j] <= indices[i]) {
+                j--;
+            }
+
+            swap(indices, i, j);
+            reverse(indices, i + 1, indices.length - 1);
+            return true;
+        }
+
+        private void swap(int[] arr, int i, int j) {
+            int temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+        }
+
+        private void reverse(int[] arr, int i, int j) {
+            while (i < j) {
+                swap(arr, i++, j--);
+            }
+        }
+    }
 }

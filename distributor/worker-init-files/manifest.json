@@ -1,4 +1,4 @@
 {
-  "className": "org.example.ParallelGraphRouteFinder",
+  "className": "org.example.BruteForceTSP",
   "annotationName": "org.example.Solve"
 }
